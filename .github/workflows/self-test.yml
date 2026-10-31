@@ -1,0 +1,16 @@
+name: Self-test
+
+# Runs scan.yml on this repo, so a change to it is exercised before a release.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    uses: ./.github/workflows/scan.yml

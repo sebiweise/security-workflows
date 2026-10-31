@@ -1,0 +1,177 @@
+name: Security scan
+
+# Reusable security scan for every repo, private ones included: SAST (Semgrep),
+# dependencies and Dockerfiles (Trivy) and secrets in the git history
+# (Gitleaks). All three are open source and run here on the runner, so there is
+# no line limit and no account. Called from each repo's security.yml; see
+# README.md.
+#
+# Every finding is listed in the log and the job summary, but only the severe
+# ones fail the job: Semgrep at the levels in `semgrep-fail-on`, Trivy at
+# CRITICAL (vulnerabilities only when a fixed version exists, since an unfixed
+# one cannot be acted on), Gitleaks on any secret.
+#
+# The results do not go to the GitHub Security tab: uploading SARIF needs
+# GitHub Advanced Security on private repos.
+
+on:
+  workflow_call:
+    inputs:
+      semgrep:
+        type: boolean
+        default: true
+      trivy:
+        type: boolean
+        default: true
+      gitleaks:
+        type: boolean
+        default: true
+      semgrep-rules:
+        description: Semgrep registry rulesets, space-separated. Rules for languages a repo does not use simply match nothing.
+        type: string
+        default: p/default p/owasp-top-ten p/typescript p/react p/nextjs p/python p/dockerfile
+      semgrep-fail-on:
+        description: Semgrep severities that fail the job, space-separated. The registry mixes the legacy levels (ERROR, WARNING, INFO) with the newer ones (CRITICAL, HIGH, MEDIUM, LOW).
+        type: string
+        default: CRITICAL HIGH ERROR
+
+permissions:
+  contents: read
+
+# The tools run from their official images, pinned to a digest (a tag can be
+# moved to other content). Dependabot does not see these; bump them by hand,
+# tag and digest together: docker buildx imagetools inspect <image>:<tag>
+env:
+  SEMGREP_IMAGE: semgrep/semgrep:1.183.0@sha256:2e45517a85e13a9cca14a2a00df6bb48affd66b8ebfae1b0991cd57578362fb0
+  TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+
+jobs:
+  semgrep:
+    if: inputs.semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Suppress a false positive with a `// nosemgrep: <rule-id>` comment on the
+      # line, or exclude paths in .semgrepignore.
+      - name: Scan
+        env:
+          RULES: ${{ inputs.semgrep-rules }}
+        run: |
+          args=()
+          for rule in $RULES; do args+=(--config "$rule"); done
+          docker run --rm -v "$PWD:/src" -w /src -e SEMGREP_SEND_METRICS=off "$SEMGREP_IMAGE" \
+            semgrep scan "${args[@]}" --metrics=off --quiet --json > semgrep.json
+
+      - name: Report
+        env:
+          FAIL_ON: ${{ inputs.semgrep-fail-on }}
+        run: |
+          read -ra fail_on <<< "$FAIL_ON"
+          lib='
+            def failing: .extra.severity | IN($ARGS.positional[]);
+            def rank: . as $s | ["CRITICAL", "ERROR", "HIGH", "MEDIUM", "WARNING", "LOW", "INFO"] | index($s) // 9;'
+          {
+            echo "### Semgrep"
+            echo
+            jq -r '"\(.results | length) finding(s)"' semgrep.json
+            echo
+            jq -r "$lib"'
+              select(.results | length > 0)
+              | "| Severity | Rule | Location |", "|---|---|---|",
+                (.results | sort_by(.extra.severity | rank)[]
+                 | "| \(.extra.severity) | `\(.check_id)` | `\(.path):\(.start.line)` |")
+            ' semgrep.json
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          jq -r "$lib"'.results[] | select(failing)
+            | "::error file=\(.path),line=\(.start.line),title=\(.check_id)::\(.extra.message | gsub("\\s+"; " "))"
+          ' semgrep.json --args "${fail_on[@]}"
+          count=$(jq "$lib"'[.results[] | select(failing)] | length' semgrep.json --args "${fail_on[@]}")
+          if [ "$count" -gt 0 ]; then
+            echo "$count finding(s) at $FAIL_ON"
+            exit 1
+          fi
+
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: semgrep
+          path: semgrep.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  trivy:
+    if: inputs.trivy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Lock files (pnpm, npm, pip, ...) for known vulnerabilities, Dockerfiles
+      # for misconfigurations. Suppress a finding by its ID in .trivyignore.
+      - name: Scan
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src "$TRIVY_IMAGE" \
+            fs --quiet --scanners vuln,misconfig --severity HIGH,CRITICAL --format json . > trivy.json
+
+      - name: Report
+        run: |
+          lib='
+            def findings: [.Results[]? | .Target as $t
+              | ((.Vulnerabilities // [])[]
+                 | {sev: .Severity, id: .VulnerabilityID, target: $t,
+                    what: "\(.PkgName) \(.InstalledVersion) → \(.FixedVersion // "no fix")",
+                    fixable: ((.FixedVersion // "") != "")}),
+                ((.Misconfigurations // [])[]
+                 | {sev: .Severity, id: .ID, target: $t, what: .Title, fixable: true})];
+            def failing: .sev == "CRITICAL" and .fixable;'
+          {
+            echo "### Trivy"
+            echo
+            jq -r "$lib"'"\(findings | length) finding(s) at HIGH or CRITICAL"' trivy.json
+            echo
+            jq -r "$lib"'
+              findings | select(length > 0)
+              | "| Severity | ID | Finding | File |", "|---|---|---|---|",
+                (sort_by(.sev)[] | "| \(.sev) | \(.id) | \(.what | gsub("\\|"; "\\|")) | `\(.target)` |")
+            ' trivy.json
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          jq -r "$lib"'findings[] | select(failing)
+            | "::error file=\(.target),title=\(.id)::\(.what)"
+          ' trivy.json
+          count=$(jq "$lib"'findings | map(select(failing)) | length' trivy.json)
+          if [ "$count" -gt 0 ]; then
+            echo "$count CRITICAL finding(s) with a fix available"
+            exit 1
+          fi
+
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trivy
+          path: trivy.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  gitleaks:
+    if: inputs.gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The whole history: a secret removed in a later commit is still leaked.
+          fetch-depth: 0
+
+      # A false positive goes into .gitleaksignore by its fingerprint (printed
+      # in the log); a leaked secret has to be rotated, not ignored.
+      - run: >-
+          docker run --rm -v "$PWD:/repo" "$GITLEAKS_IMAGE"
+          git /repo --redact --verbose --no-banner
