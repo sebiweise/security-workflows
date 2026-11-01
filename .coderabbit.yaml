@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit configuration for security-workflows.
+language: de-DE
+tone_instructions: >-
+  Sachlich und knapp auf Deutsch. Der Workflow schützt andere Repos: still
+  durchrutschende Funde, Script-Injection über Inputs und gelockerte Rechte
+  immer zuerst nennen.
+early_access: false
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  poem: false
+  collapse_walkthrough: true
+  sequence_diagrams: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - master
+    ignore_usernames:
+      - dependabot[bot]
+
+  path_instructions:
+    - path: ".github/workflows/scan.yml"
+      instructions: >-
+        Wiederverwendbarer Workflow (workflow_call), den andere Repos per
+        Commit-SHA einbinden. Inputs nie direkt per `${{ inputs.* }}` in
+        `run:` einsetzen, sondern über `env:` (Script-Injection). Tool-Images
+        per Tag und Digest pinnen, Actions per Commit-SHA mit
+        Versionskommentar; Dependabot sieht die Images nicht, neue Versionen
+        werden von Hand aktualisiert. permissions bleiben `contents: read`,
+        checkout ohne persist-credentials. Die Fail-Schwellen (Semgrep nach
+        semgrep-fail-on, Trivy nur CRITICAL mit verfügbarem Fix, Gitleaks
+        bei jedem Fund) müssen zur Tabelle in der README passen. Die
+        jq-Auswertung muss mit fehlenden Feldern und leeren Ergebnissen
+        umgehen, ohne einen Fehlschlag zu verschlucken. Umbenannte oder
+        entfernte Inputs und Jobnamen (`scan / semgrep` usw. sind in den
+        aufrufenden Repos Pflicht-Checks) brechen die Aufrufer: als Breaking
+        Change kennzeichnen.
+    - path: ".github/workflows/self-test.yml"
+      instructions: >-
+        Führt scan.yml auf diesem Repo aus, damit jede Änderung vor einem
+        Release läuft. Muss bei pull_request und push auf master laufen und
+        den lokalen Workflow (./.github/workflows/scan.yml) nutzen.
+    - path: ".github/dependabot.yml"
+      instructions: >-
+        Dependabot hält die gepinnten Actions aktuell (mit cooldown). Die
+        Tool-Images in scan.yml deckt Dependabot nicht ab.
+    - path: "README.md"
+      instructions: >-
+        Englisch, für Nutzer anderer Repos. Muss zu scan.yml passen: Jobs,
+        Inputs mit Defaults, Fail-Schwellen, Beispiel-Workflow und das
+        Vorgehen gegen Fehlalarme. Releases als SemVer-Tags (v1.0.1 …), damit
+        die Aufrufer einen Dependabot-PR bekommen.
+
+  tools:
+    yamllint:
+      enabled: true
+    actionlint:
+      enabled: true
+    shellcheck:
+      enabled: true
+    markdownlint:
+      enabled: false
+    gitleaks:
+      enabled: true
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "README.md"
+  learnings:
+    scope: local
