@@ -79,3 +79,9 @@ docker buildx imagetools inspect ghcr.io/gitleaks/gitleaks:<version>
 ```
 
 Then tag a release (`v1.0.1`, ...) so the calling repos get a Dependabot PR.
+
+## Support
+
+security-workflows is free and open source. If it saves you time and you'd like to say thanks,
+you can [sponsor me on GitHub](https://github.com/sponsors/sebiweise). Bug reports
+and pull requests help just as much.
