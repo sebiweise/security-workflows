@@ -219,7 +219,12 @@ jobs:
       # in the log); a leaked secret has to be rotated, not ignored. The
       # explicit --config (the default rules) keeps Gitleaks from loading a
       # .gitleaks.toml from the scanned repo, which could allowlist anything.
+      # Gitleaks reads `git log -p`, which prints no content for files that a
+      # .gitattributes in the repo marks -diff or binary. .git/info/attributes
+      # takes precedence over it, so `* diff` there shows every file again.
       - run: |
+          mkdir -p .git/info
+          printf '* diff\n' > .git/info/attributes
           config="$RUNNER_TEMP/gitleaks.toml"
           printf '[extend]\nuseDefault = true\n' > "$config"
           docker run --rm -v "$PWD:/repo" -v "$config:/etc/gitleaks.toml:ro" "$GITLEAKS_IMAGE" \
