@@ -88,9 +88,15 @@ jobs:
             exit 1
           }
           read -ra fail_on <<< "$FAIL_ON"
+          # Paths come from the scanned repo. cmd_data and cmd_prop escape them
+          # for workflow commands, so a newline cannot start a command of its
+          # own; md_cell keeps them on one line, inside their table cell.
           lib='
             def failing: .extra.severity | IN($ARGS.positional[]);
-            def rank: . as $s | ["CRITICAL", "ERROR", "HIGH", "MEDIUM", "WARNING", "LOW", "INFO"] | index($s) // 9;'
+            def rank: . as $s | ["CRITICAL", "ERROR", "HIGH", "MEDIUM", "WARNING", "LOW", "INFO"] | index($s) // 9;
+            def cmd_data: tostring | gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
+            def cmd_prop: cmd_data | gsub(":"; "%3A") | gsub(","; "%2C");
+            def md_cell: tostring | gsub("[\r\n]+"; " ") | gsub("\\|"; "\\|") | gsub("`"; "");'
           {
             echo "### Semgrep"
             echo
@@ -100,11 +106,11 @@ jobs:
               select(.results | length > 0)
               | "| Severity | Rule | Location |", "|---|---|---|",
                 (.results | sort_by(.extra.severity | rank)[]
-                 | "| \(.extra.severity) | `\(.check_id)` | `\(.path):\(.start.line)` |")
+                 | "| \(.extra.severity | md_cell) | `\(.check_id | md_cell)` | `\(.path | md_cell):\(.start.line)` |")
             ' "$REPORT"
           } | tee -a "$GITHUB_STEP_SUMMARY"
           jq -r "$lib"'.results[] | select(failing)
-            | "::error file=\(.path),line=\(.start.line),title=\(.check_id)::\(.extra.message | gsub("\\s+"; " "))"
+            | "::error file=\(.path | cmd_prop),line=\(.start.line),title=\(.check_id | cmd_prop)::\(.extra.message | gsub("\\s+"; " ") | cmd_data)"
           ' "$REPORT" --args "${fail_on[@]}"
           count=$(jq "$lib"'[.results[] | select(failing)] | length' "$REPORT" --args "${fail_on[@]}")
           [[ $count =~ ^[0-9]+$ ]] || { echo "::error title=Semgrep::Could not count the findings"; exit 1; }
@@ -149,6 +155,8 @@ jobs:
             echo "::error title=Trivy::The Trivy report is missing or not valid Trivy JSON"
             exit 1
           }
+          # Targets and package names come from the scanned repo: escaped as
+          # in the Semgrep report.
           lib='
             def findings: [.Results[]? | .Target as $t
               | ((.Vulnerabilities // [])[]
@@ -157,7 +165,10 @@ jobs:
                     fixable: ((.FixedVersion // "") != "")}),
                 ((.Misconfigurations // [])[]
                  | {sev: .Severity, id: .ID, target: $t, what: .Title, fixable: true})];
-            def failing: .sev == "CRITICAL" and .fixable;'
+            def failing: .sev == "CRITICAL" and .fixable;
+            def cmd_data: tostring | gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
+            def cmd_prop: cmd_data | gsub(":"; "%3A") | gsub(","; "%2C");
+            def md_cell: tostring | gsub("[\r\n]+"; " ") | gsub("\\|"; "\\|") | gsub("`"; "");'
           {
             echo "### Trivy"
             echo
@@ -166,11 +177,11 @@ jobs:
             jq -r "$lib"'
               findings | select(length > 0)
               | "| Severity | ID | Finding | File |", "|---|---|---|---|",
-                (sort_by(.sev)[] | "| \(.sev) | \(.id) | \(.what | gsub("\\|"; "\\|")) | `\(.target)` |")
+                (sort_by(.sev)[] | "| \(.sev | md_cell) | \(.id | md_cell) | \(.what | md_cell) | `\(.target | md_cell)` |")
             ' "$REPORT"
           } | tee -a "$GITHUB_STEP_SUMMARY"
           jq -r "$lib"'findings[] | select(failing)
-            | "::error file=\(.target),title=\(.id)::\(.what)"
+            | "::error file=\(.target | cmd_prop),title=\(.id | cmd_prop)::\(.what | cmd_data)"
           ' "$REPORT"
           count=$(jq "$lib"'findings | map(select(failing)) | length' "$REPORT")
           [[ $count =~ ^[0-9]+$ ]] || { echo "::error title=Trivy::Could not count the findings"; exit 1; }
