@@ -97,6 +97,9 @@ check semgrep 1 "hostile path" "$(semgrep_result ERROR "$evil")" \
 check trivy 1 "hostile target and package" "$(trivy_vuln CRITICAL 1.0.1 "$evil" "$evil")" \
   "::error file=$evil_prop,title=CVE-2026-0001::"
 check trivy 0 "hostile values below the threshold" "$(trivy_vuln HIGH 1.0.1 "$evil" "$evil")"
+# A package name is a code span in the summary, so it cannot render as a link.
+check trivy 0 "package name with Markdown" "$(trivy_vuln HIGH 1.0.1 package-lock.json '[x](https://example.com)<b>')" \
+  '| `[x](https://example.com)<b> 1.0.0 → 1.0.1` |'
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures check(s) failed"

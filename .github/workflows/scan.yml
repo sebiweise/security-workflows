@@ -90,7 +90,8 @@ jobs:
           read -ra fail_on <<< "$FAIL_ON"
           # Paths come from the scanned repo. cmd_data and cmd_prop escape them
           # for workflow commands, so a newline cannot start a command of its
-          # own; md_cell keeps them on one line, inside their table cell.
+          # own; md_cell keeps them on one line, inside their table cell, and
+          # every repo-controlled cell is a code span, so no link or HTML renders.
           lib='
             def failing: .extra.severity | IN($ARGS.positional[]);
             def rank: . as $s | ["CRITICAL", "ERROR", "HIGH", "MEDIUM", "WARNING", "LOW", "INFO"] | index($s) // 9;
@@ -162,7 +163,8 @@ jobs:
             exit 1
           }
           # Targets and package names come from the scanned repo: escaped as
-          # in the Semgrep report.
+          # in the Semgrep report. In the summary both sit in code spans, so a
+          # package name cannot render as a link or HTML.
           lib='
             def findings: [.Results[]? | .Target as $t
               | ((.Vulnerabilities // [])[]
@@ -183,7 +185,7 @@ jobs:
             jq -r "$lib"'
               findings | select(length > 0)
               | "| Severity | ID | Finding | File |", "|---|---|---|---|",
-                (sort_by(.sev)[] | "| \(.sev | md_cell) | \(.id | md_cell) | \(.what | md_cell) | `\(.target | md_cell)` |")
+                (sort_by(.sev)[] | "| \(.sev | md_cell) | \(.id | md_cell) | `\(.what | md_cell)` | `\(.target | md_cell)` |")
             ' "$REPORT"
           } | tee -a "$GITHUB_STEP_SUMMARY"
           jq -r "$lib"'findings[] | select(failing)
