@@ -13,13 +13,13 @@ trap 'rm -rf "$work"' EXIT
 failures=0
 
 for job in semgrep trivy; do
-  yq ".jobs.$job.steps[] | select(.name == \"Report\") | .run" "$workflow" > "$work/$job.sh"
+  yq -r ".jobs.$job.steps[] | select(.name == \"Report\") | .run" "$workflow" > "$work/$job.sh"
   [ -s "$work/$job.sh" ] || { echo "no Report step in job $job"; exit 1; }
 done
 
-# check <job> <expected exit> <name> <report content, or MISSING>
+# check <job> <expected exit> <name> <report content, or MISSING> [text the output must contain]
 check() {
-  local job=$1 want=$2 name=$3 content=$4 report="$work/report.json" got
+  local job=$1 want=$2 name=$3 content=$4 expect=${5-} report="$work/report.json" got
   rm -f "$report"
   [ "$content" = MISSING ] || printf '%s' "$content" > "$report"
   : > "$work/summary"
@@ -43,6 +43,14 @@ check() {
   if tail -n +2 "$work/summary" | grep -Ev '^$|finding\(s\)|^\|.*\|$' | grep -q .; then
     echo "FAIL $job: $name: broken summary"
     sed 's/^/    /' "$work/summary"
+    failures=$((failures + 1))
+    return
+  fi
+  # Exact ::error line start: commas and colons in a property are escaped, so
+  # a value cannot add a property of its own.
+  if [ -n "$expect" ] && ! grep -qF -- "$expect" "$work/out"; then
+    echo "FAIL $job: $name: output does not contain: $expect"
+    sed 's/^/    /' "$work/out"
     failures=$((failures + 1))
     return
   fi
@@ -83,8 +91,11 @@ check trivy 0 "HIGH with a fix" "$(trivy_vuln HIGH 1.0.1 package-lock.json lodas
 
 # Paths and package names come from the scanned repo.
 evil=$'a,line=1\n::warning::injected\n`|b'
-check semgrep 1 "hostile path" "$(semgrep_result ERROR "$evil")"
-check trivy 1 "hostile target and package" "$(trivy_vuln CRITICAL 1.0.1 "$evil" "$evil")"
+evil_prop='a%2Cline=1%0A%3A%3Awarning%3A%3Ainjected%0A`|b'
+check semgrep 1 "hostile path" "$(semgrep_result ERROR "$evil")" \
+  "::error file=$evil_prop,line=3,title=rule.id::"
+check trivy 1 "hostile target and package" "$(trivy_vuln CRITICAL 1.0.1 "$evil" "$evil")" \
+  "::error file=$evil_prop,title=CVE-2026-0001::"
 check trivy 0 "hostile values below the threshold" "$(trivy_vuln HIGH 1.0.1 "$evil" "$evil")"
 
 if [ "$failures" -gt 0 ]; then
