@@ -138,12 +138,18 @@ jobs:
 
       # Lock files (pnpm, npm, pip, ...) for known vulnerabilities, Dockerfiles
       # for misconfigurations. Suppress a finding by its ID in .trivyignore.
+      # Trivy runs from /tmp, not the repo, so it does not load a trivy.yaml
+      # from the scanned repo (which could skip paths or divert the report).
+      # Trivy fails on an --ignorefile that does not exist, hence the check.
       - name: Scan
         env:
           REPORT: ${{ runner.temp }}/trivy.json
         run: |
-          docker run --rm -v "$PWD:/src" -w /src "$TRIVY_IMAGE" \
-            fs --quiet --scanners vuln,misconfig --severity HIGH,CRITICAL --format json . > "$REPORT"
+          args=()
+          if [ -f .trivyignore ]; then args+=(--ignorefile /src/.trivyignore); fi
+          docker run --rm -v "$PWD:/src" -w /tmp "$TRIVY_IMAGE" \
+            fs --quiet --scanners vuln,misconfig --severity HIGH,CRITICAL --format json \
+            "${args[@]}" /src > "$REPORT"
 
       # Fails closed like the Semgrep report. A clean scan still has a
       # SchemaVersion; Results may be missing when there is nothing to scan.
@@ -210,7 +216,11 @@ jobs:
           fetch-depth: 0
 
       # A false positive goes into .gitleaksignore by its fingerprint (printed
-      # in the log); a leaked secret has to be rotated, not ignored.
-      - run: >-
-          docker run --rm -v "$PWD:/repo" "$GITLEAKS_IMAGE"
-          git /repo --redact --verbose --no-banner
+      # in the log); a leaked secret has to be rotated, not ignored. The
+      # explicit --config (the default rules) keeps Gitleaks from loading a
+      # .gitleaks.toml from the scanned repo, which could allowlist anything.
+      - run: |
+          config="$RUNNER_TEMP/gitleaks.toml"
+          printf '[extend]\nuseDefault = true\n' > "$config"
+          docker run --rm -v "$PWD:/repo" -v "$config:/etc/gitleaks.toml:ro" "$GITLEAKS_IMAGE" \
+            git /repo --config /etc/gitleaks.toml --redact --verbose --no-banner

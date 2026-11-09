@@ -67,6 +67,10 @@ the fork.
 | Trivy | The finding's ID (e.g. `CVE-2026-12345`) on a line of `.trivyignore` |
 | Gitleaks | The fingerprint from the log on a line of `.gitleaksignore`. A real leaked secret has to be rotated; ignoring it does not un-leak it. |
 
+These are the only ways to suppress a finding. The scanner configuration is
+fixed by `scan.yml`, so a `trivy.yaml` or `.gitleaks.toml` in the scanned repo
+is not read, and a missing, empty or malformed report fails the job.
+
 ## Maintenance
 
 The three tools run from their official images, pinned by tag and digest in
