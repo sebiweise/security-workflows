@@ -38,6 +38,12 @@ on:
 permissions:
   contents: read
 
+# Explicit bash adds pipefail to the default -e, so a failing jq inside a
+# `... | tee` pipeline fails the step.
+defaults:
+  run:
+    shell: bash
+
 # The tools run from their official images, pinned to a digest (a tag can be
 # moved to other content). Dependabot does not see these; bump them by hand,
 # tag and digest together: docker buildx imagetools inspect <image>:<tag>
@@ -58,19 +64,29 @@ jobs:
 
       # Suppress a false positive with a `// nosemgrep: <rule-id>` comment on the
       # line, or exclude paths in .semgrepignore.
+      # The report goes to the runner's temp dir, outside the checkout, so a
+      # file or symlink of the same name in the repo cannot redirect it.
       - name: Scan
         env:
           RULES: ${{ inputs.semgrep-rules }}
+          REPORT: ${{ runner.temp }}/semgrep.json
         run: |
           args=()
           for rule in $RULES; do args+=(--config "$rule"); done
           docker run --rm -v "$PWD:/src" -w /src -e SEMGREP_SEND_METRICS=off "$SEMGREP_IMAGE" \
-            semgrep scan "${args[@]}" --metrics=off --quiet --json > semgrep.json
+            semgrep scan "${args[@]}" --metrics=off --quiet --json > "$REPORT"
 
+      # Fails closed: a missing, empty or malformed report fails the job instead
+      # of counting as zero findings. A clean scan still has `results: []`.
       - name: Report
         env:
           FAIL_ON: ${{ inputs.semgrep-fail-on }}
+          REPORT: ${{ runner.temp }}/semgrep.json
         run: |
+          jq -e 'type == "object" and (.results | type == "array")' "$REPORT" > /dev/null || {
+            echo "::error title=Semgrep::The Semgrep report is missing or not valid JSON with a results list"
+            exit 1
+          }
           read -ra fail_on <<< "$FAIL_ON"
           lib='
             def failing: .extra.severity | IN($ARGS.positional[]);
@@ -78,19 +94,20 @@ jobs:
           {
             echo "### Semgrep"
             echo
-            jq -r '"\(.results | length) finding(s)"' semgrep.json
+            jq -r '"\(.results | length) finding(s)"' "$REPORT"
             echo
             jq -r "$lib"'
               select(.results | length > 0)
               | "| Severity | Rule | Location |", "|---|---|---|",
                 (.results | sort_by(.extra.severity | rank)[]
                  | "| \(.extra.severity) | `\(.check_id)` | `\(.path):\(.start.line)` |")
-            ' semgrep.json
+            ' "$REPORT"
           } | tee -a "$GITHUB_STEP_SUMMARY"
           jq -r "$lib"'.results[] | select(failing)
             | "::error file=\(.path),line=\(.start.line),title=\(.check_id)::\(.extra.message | gsub("\\s+"; " "))"
-          ' semgrep.json --args "${fail_on[@]}"
-          count=$(jq "$lib"'[.results[] | select(failing)] | length' semgrep.json --args "${fail_on[@]}")
+          ' "$REPORT" --args "${fail_on[@]}"
+          count=$(jq "$lib"'[.results[] | select(failing)] | length' "$REPORT" --args "${fail_on[@]}")
+          [[ $count =~ ^[0-9]+$ ]] || { echo "::error title=Semgrep::Could not count the findings"; exit 1; }
           if [ "$count" -gt 0 ]; then
             echo "$count finding(s) at $FAIL_ON"
             exit 1
@@ -100,8 +117,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: semgrep
-          path: semgrep.json
-          if-no-files-found: ignore
+          path: ${{ runner.temp }}/semgrep.json
+          if-no-files-found: warn
           retention-days: 14
 
   trivy:
@@ -116,12 +133,22 @@ jobs:
       # Lock files (pnpm, npm, pip, ...) for known vulnerabilities, Dockerfiles
       # for misconfigurations. Suppress a finding by its ID in .trivyignore.
       - name: Scan
+        env:
+          REPORT: ${{ runner.temp }}/trivy.json
         run: |
           docker run --rm -v "$PWD:/src" -w /src "$TRIVY_IMAGE" \
-            fs --quiet --scanners vuln,misconfig --severity HIGH,CRITICAL --format json . > trivy.json
+            fs --quiet --scanners vuln,misconfig --severity HIGH,CRITICAL --format json . > "$REPORT"
 
+      # Fails closed like the Semgrep report. A clean scan still has a
+      # SchemaVersion; Results may be missing when there is nothing to scan.
       - name: Report
+        env:
+          REPORT: ${{ runner.temp }}/trivy.json
         run: |
+          jq -e 'type == "object" and has("SchemaVersion") and (.Results | type == "array" or . == null)' "$REPORT" > /dev/null || {
+            echo "::error title=Trivy::The Trivy report is missing or not valid Trivy JSON"
+            exit 1
+          }
           lib='
             def findings: [.Results[]? | .Target as $t
               | ((.Vulnerabilities // [])[]
@@ -134,18 +161,19 @@ jobs:
           {
             echo "### Trivy"
             echo
-            jq -r "$lib"'"\(findings | length) finding(s) at HIGH or CRITICAL"' trivy.json
+            jq -r "$lib"'"\(findings | length) finding(s) at HIGH or CRITICAL"' "$REPORT"
             echo
             jq -r "$lib"'
               findings | select(length > 0)
               | "| Severity | ID | Finding | File |", "|---|---|---|---|",
                 (sort_by(.sev)[] | "| \(.sev) | \(.id) | \(.what | gsub("\\|"; "\\|")) | `\(.target)` |")
-            ' trivy.json
+            ' "$REPORT"
           } | tee -a "$GITHUB_STEP_SUMMARY"
           jq -r "$lib"'findings[] | select(failing)
             | "::error file=\(.target),title=\(.id)::\(.what)"
-          ' trivy.json
-          count=$(jq "$lib"'findings | map(select(failing)) | length' trivy.json)
+          ' "$REPORT"
+          count=$(jq "$lib"'findings | map(select(failing)) | length' "$REPORT")
+          [[ $count =~ ^[0-9]+$ ]] || { echo "::error title=Trivy::Could not count the findings"; exit 1; }
           if [ "$count" -gt 0 ]; then
             echo "$count CRITICAL finding(s) with a fix available"
             exit 1
@@ -155,8 +183,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: trivy
-          path: trivy.json
-          if-no-files-found: ignore
+          path: ${{ runner.temp }}/trivy.json
+          if-no-files-found: warn
           retention-days: 14
 
   gitleaks:
