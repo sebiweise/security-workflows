@@ -71,8 +71,9 @@ Each of these hides a finding, so watch for them in review; the tools may
 accept other inline forms too. The scanner configuration itself is fixed by
 `scan.yml`: a `trivy.yaml` or
 `.gitleaks.toml` in the scanned repo is not read, a `.gitattributes` there
-cannot hide file content from Gitleaks, and a missing, empty or malformed
-report fails the job.
+cannot hide text files from Gitleaks (files git detects as binary, by a NUL
+byte, are skipped as usual), and a missing, empty or malformed report fails
+the job.
 
 ## Maintenance
 
