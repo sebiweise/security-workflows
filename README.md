@@ -58,6 +58,21 @@ the fork.
 | `semgrep`, `trivy`, `gitleaks` | `true` | Set to `false` to skip a job, e.g. `gitleaks: false` where it already runs elsewhere. |
 | `semgrep-rules` | `p/default p/owasp-top-ten p/typescript p/react p/nextjs p/python p/dockerfile` | [Registry](https://semgrep.dev/explore) rulesets. |
 | `semgrep-fail-on` | `CRITICAL HIGH ERROR` | Semgrep severities that fail the job. |
+| `runs-on` | `ubuntu-latest` | Runner label for all jobs, e.g. a self-hosted runner. It needs bash, git (for the full-history checkout Gitleaks scans), jq 1.6 or later and Docker; if Docker is reached through a mounted socket, the work directory must have the same path on the host (the tools are `docker run` with the workspace mounted). |
+
+A private repo can keep the switch in a repository variable, so the scan
+falls back to the hosted runner when the variable is unset:
+
+```yaml
+jobs:
+  scan:
+    uses: sebiweise/security-workflows/.github/workflows/scan.yml@<commit-sha> # v1.1.0
+    with:
+      runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-latest' }}
+```
+
+Do not point a public repo at a self-hosted runner: a pull request from a fork
+would run its code there.
 
 ### False positives
 
