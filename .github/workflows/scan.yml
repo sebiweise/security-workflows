@@ -38,6 +38,12 @@ on:
 permissions:
   contents: read
 
+# Explicit bash adds pipefail to the default -e, so a failing jq inside a
+# `... | tee` pipeline fails the step.
+defaults:
+  run:
+    shell: bash
+
 # The tools run from their official images, pinned to a digest (a tag can be
 # moved to other content). Dependabot does not see these; bump them by hand,
 # tag and digest together: docker buildx imagetools inspect <image>:<tag>
@@ -58,39 +64,57 @@ jobs:
 
       # Suppress a false positive with a `// nosemgrep: <rule-id>` comment on the
       # line, or exclude paths in .semgrepignore.
+      # The report goes to the runner's temp dir, outside the checkout, so a
+      # file or symlink of the same name in the repo cannot redirect it.
       - name: Scan
         env:
           RULES: ${{ inputs.semgrep-rules }}
+          REPORT: ${{ runner.temp }}/semgrep.json
         run: |
           args=()
           for rule in $RULES; do args+=(--config "$rule"); done
           docker run --rm -v "$PWD:/src" -w /src -e SEMGREP_SEND_METRICS=off "$SEMGREP_IMAGE" \
-            semgrep scan "${args[@]}" --metrics=off --quiet --json > semgrep.json
+            semgrep scan "${args[@]}" --metrics=off --quiet --json > "$REPORT"
 
+      # Fails closed: a missing, empty or malformed report fails the job instead
+      # of counting as zero findings. A clean scan still has `results: []`.
       - name: Report
         env:
           FAIL_ON: ${{ inputs.semgrep-fail-on }}
+          REPORT: ${{ runner.temp }}/semgrep.json
         run: |
+          jq -e 'type == "object" and (.results | type == "array")' "$REPORT" > /dev/null || {
+            echo "::error title=Semgrep::The Semgrep report is missing or not valid JSON with a results list"
+            exit 1
+          }
           read -ra fail_on <<< "$FAIL_ON"
+          # Paths come from the scanned repo. cmd_data and cmd_prop escape them
+          # for workflow commands, so a newline cannot start a command of its
+          # own; md_cell keeps them on one line, inside their table cell, and
+          # every repo-controlled cell is a code span, so no link or HTML renders.
           lib='
             def failing: .extra.severity | IN($ARGS.positional[]);
-            def rank: . as $s | ["CRITICAL", "ERROR", "HIGH", "MEDIUM", "WARNING", "LOW", "INFO"] | index($s) // 9;'
+            def rank: . as $s | ["CRITICAL", "ERROR", "HIGH", "MEDIUM", "WARNING", "LOW", "INFO"] | index($s) // 9;
+            def cmd_data: tostring | gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
+            def cmd_prop: cmd_data | gsub(":"; "%3A") | gsub(","; "%2C");
+            def md_cell: tostring | gsub("[\r\n]+"; " ") | gsub("\\|"; "\\|") | gsub("`"; "");'
           {
             echo "### Semgrep"
             echo
-            jq -r '"\(.results | length) finding(s)"' semgrep.json
+            jq -r '"\(.results | length) finding(s)"' "$REPORT"
             echo
             jq -r "$lib"'
               select(.results | length > 0)
               | "| Severity | Rule | Location |", "|---|---|---|",
                 (.results | sort_by(.extra.severity | rank)[]
-                 | "| \(.extra.severity) | `\(.check_id)` | `\(.path):\(.start.line)` |")
-            ' semgrep.json
+                 | "| \(.extra.severity | md_cell) | `\(.check_id | md_cell)` | `\(.path | md_cell):\(.start.line)` |")
+            ' "$REPORT"
           } | tee -a "$GITHUB_STEP_SUMMARY"
           jq -r "$lib"'.results[] | select(failing)
-            | "::error file=\(.path),line=\(.start.line),title=\(.check_id)::\(.extra.message | gsub("\\s+"; " "))"
-          ' semgrep.json --args "${fail_on[@]}"
-          count=$(jq "$lib"'[.results[] | select(failing)] | length' semgrep.json --args "${fail_on[@]}")
+            | "::error file=\(.path | cmd_prop),line=\(.start.line),title=\(.check_id | cmd_prop)::\(.extra.message | gsub("\\s+"; " ") | cmd_data)"
+          ' "$REPORT" --args "${fail_on[@]}"
+          count=$(jq "$lib"'[.results[] | select(failing)] | length' "$REPORT" --args "${fail_on[@]}")
+          [[ $count =~ ^[0-9]+$ ]] || { echo "::error title=Semgrep::Could not count the findings"; exit 1; }
           if [ "$count" -gt 0 ]; then
             echo "$count finding(s) at $FAIL_ON"
             exit 1
@@ -100,8 +124,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: semgrep
-          path: semgrep.json
-          if-no-files-found: ignore
+          path: ${{ runner.temp }}/semgrep.json
+          if-no-files-found: warn
           retention-days: 14
 
   trivy:
@@ -115,13 +139,32 @@ jobs:
 
       # Lock files (pnpm, npm, pip, ...) for known vulnerabilities, Dockerfiles
       # for misconfigurations. Suppress a finding by its ID in .trivyignore.
+      # Trivy runs from /tmp, not the repo, so it does not load a trivy.yaml
+      # from the scanned repo (which could skip paths or divert the report).
+      # Trivy fails on an --ignorefile that does not exist, hence the check.
       - name: Scan
+        env:
+          REPORT: ${{ runner.temp }}/trivy.json
         run: |
-          docker run --rm -v "$PWD:/src" -w /src "$TRIVY_IMAGE" \
-            fs --quiet --scanners vuln,misconfig --severity HIGH,CRITICAL --format json . > trivy.json
+          args=()
+          if [ -f .trivyignore ]; then args+=(--ignorefile /src/.trivyignore); fi
+          docker run --rm -v "$PWD:/src" -w /tmp "$TRIVY_IMAGE" \
+            fs --quiet --scanners vuln,misconfig --severity HIGH,CRITICAL --format json \
+            "${args[@]}" /src > "$REPORT"
 
+      # Fails closed like the Semgrep report. A clean scan still has a
+      # SchemaVersion; Results may be missing when there is nothing to scan.
       - name: Report
+        env:
+          REPORT: ${{ runner.temp }}/trivy.json
         run: |
+          jq -e 'type == "object" and has("SchemaVersion") and (.Results | type == "array" or . == null)' "$REPORT" > /dev/null || {
+            echo "::error title=Trivy::The Trivy report is missing or not valid Trivy JSON"
+            exit 1
+          }
+          # Targets and package names come from the scanned repo: escaped as
+          # in the Semgrep report. In the summary both sit in code spans, so a
+          # package name cannot render as a link or HTML.
           lib='
             def findings: [.Results[]? | .Target as $t
               | ((.Vulnerabilities // [])[]
@@ -130,22 +173,26 @@ jobs:
                     fixable: ((.FixedVersion // "") != "")}),
                 ((.Misconfigurations // [])[]
                  | {sev: .Severity, id: .ID, target: $t, what: .Title, fixable: true})];
-            def failing: .sev == "CRITICAL" and .fixable;'
+            def failing: .sev == "CRITICAL" and .fixable;
+            def cmd_data: tostring | gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
+            def cmd_prop: cmd_data | gsub(":"; "%3A") | gsub(","; "%2C");
+            def md_cell: tostring | gsub("[\r\n]+"; " ") | gsub("\\|"; "\\|") | gsub("`"; "");'
           {
             echo "### Trivy"
             echo
-            jq -r "$lib"'"\(findings | length) finding(s) at HIGH or CRITICAL"' trivy.json
+            jq -r "$lib"'"\(findings | length) finding(s) at HIGH or CRITICAL"' "$REPORT"
             echo
             jq -r "$lib"'
               findings | select(length > 0)
               | "| Severity | ID | Finding | File |", "|---|---|---|---|",
-                (sort_by(.sev)[] | "| \(.sev) | \(.id) | \(.what | gsub("\\|"; "\\|")) | `\(.target)` |")
-            ' trivy.json
+                (sort_by(.sev)[] | "| \(.sev | md_cell) | \(.id | md_cell) | `\(.what | md_cell)` | `\(.target | md_cell)` |")
+            ' "$REPORT"
           } | tee -a "$GITHUB_STEP_SUMMARY"
           jq -r "$lib"'findings[] | select(failing)
-            | "::error file=\(.target),title=\(.id)::\(.what)"
-          ' trivy.json
-          count=$(jq "$lib"'findings | map(select(failing)) | length' trivy.json)
+            | "::error file=\(.target | cmd_prop),title=\(.id | cmd_prop)::\(.what | cmd_data)"
+          ' "$REPORT"
+          count=$(jq "$lib"'findings | map(select(failing)) | length' "$REPORT")
+          [[ $count =~ ^[0-9]+$ ]] || { echo "::error title=Trivy::Could not count the findings"; exit 1; }
           if [ "$count" -gt 0 ]; then
             echo "$count CRITICAL finding(s) with a fix available"
             exit 1
@@ -155,8 +202,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: trivy
-          path: trivy.json
-          if-no-files-found: ignore
+          path: ${{ runner.temp }}/trivy.json
+          if-no-files-found: warn
           retention-days: 14
 
   gitleaks:
@@ -171,7 +218,23 @@ jobs:
           fetch-depth: 0
 
       # A false positive goes into .gitleaksignore by its fingerprint (printed
-      # in the log); a leaked secret has to be rotated, not ignored.
-      - run: >-
-          docker run --rm -v "$PWD:/repo" "$GITLEAKS_IMAGE"
-          git /repo --redact --verbose --no-banner
+      # in the log); a leaked secret has to be rotated, not ignored. The
+      # explicit --config (the default rules) keeps Gitleaks from loading a
+      # .gitleaks.toml from the scanned repo, which could allowlist anything.
+      # Gitleaks reads `git log -p`, which prints no content for files that a
+      # .gitattributes in the repo marks -diff or binary. .git/info/attributes
+      # takes precedence over it, and `* !diff` there resets the attribute to
+      # unspecified: git's own check applies again, so text files marked -diff
+      # or binary are shown, while real binaries (a NUL byte in the content)
+      # stay skipped as they would be without any .gitattributes. `* diff`
+      # would also print every image or archive in the history as text, which
+      # costs time and memory and gives false positives. The trade-off: a
+      # secret in a file that also holds a NUL byte is not scanned, which is
+      # Gitleaks' normal handling of binary files.
+      - run: |
+          mkdir -p .git/info
+          printf '* !diff\n' > .git/info/attributes
+          config="$RUNNER_TEMP/gitleaks.toml"
+          printf '[extend]\nuseDefault = true\n' > "$config"
+          docker run --rm -v "$PWD:/repo" -v "$config:/etc/gitleaks.toml:ro" "$GITLEAKS_IMAGE" \
+            git /repo --config /etc/gitleaks.toml --redact --verbose --no-banner
