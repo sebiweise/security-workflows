@@ -63,9 +63,17 @@ the fork.
 
 | Tool | Suppress with |
 |---|---|
-| Semgrep | `// nosemgrep: <rule-id>` on the line, or a path in `.semgrepignore` |
-| Trivy | The finding's ID (e.g. `CVE-2026-12345`) on a line of `.trivyignore` |
-| Gitleaks | The fingerprint from the log on a line of `.gitleaksignore`. A real leaked secret has to be rotated; ignoring it does not un-leak it. |
+| Semgrep | `// nosemgrep: <rule-id>` (or `nosem`) on the line, or a path in `.semgrepignore` |
+| Trivy | The finding's ID (e.g. `CVE-2026-12345`) on a line of `.trivyignore`, or a `trivy:ignore:<ID>` comment in the IaC formats that support inline ignores (e.g. Terraform) |
+| Gitleaks | The fingerprint from the log on a line of `.gitleaksignore`, or a `gitleaks:allow` comment on the line. A real leaked secret has to be rotated; ignoring it does not un-leak it. |
+
+Each of these hides a finding, so watch for them in review; the tools may
+accept other inline forms too. The scanner configuration itself is fixed by
+`scan.yml`: a `trivy.yaml` or
+`.gitleaks.toml` in the scanned repo is not read, a `.gitattributes` there
+cannot hide text files from Gitleaks (files git detects as binary, by a NUL
+byte, are skipped as usual), and a missing, empty or malformed report fails
+the job.
 
 ## Maintenance
 

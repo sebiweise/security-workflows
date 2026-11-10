@@ -1,6 +1,7 @@
 name: Self-test
 
-# Runs scan.yml on this repo, so a change to it is exercised before a release.
+# Runs scan.yml on this repo, so a change to it is exercised before a release,
+# and checks the Report steps against hand-made reports (test/report.sh).
 
 on:
   pull_request:
@@ -14,3 +15,13 @@ permissions:
 jobs:
   scan:
     uses: ./.github/workflows/scan.yml
+
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - run: bash test/report.sh
