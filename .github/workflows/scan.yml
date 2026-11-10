@@ -35,7 +35,7 @@ on:
         type: string
         default: CRITICAL HIGH ERROR
       runs-on:
-        description: Runner label for all three jobs, e.g. a self-hosted runner's label so a private repo saves its hosted minutes. The jobs need bash, jq and a Docker daemon on the runner; with Docker through a mounted socket, the runner's work directory must have the same path on the host.
+        description: Runner label for all three jobs, e.g. a self-hosted runner's label so a private repo saves its hosted minutes. The jobs need bash, git (for the full-history checkout), jq 1.6 or later and a Docker daemon on the runner; with Docker through a mounted socket, the runner's work directory must have the same path on the host.
         type: string
         default: ubuntu-latest
 
