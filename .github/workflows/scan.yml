@@ -34,6 +34,10 @@ on:
         description: Semgrep severities that fail the job, space-separated. The registry mixes the legacy levels (ERROR, WARNING, INFO) with the newer ones (CRITICAL, HIGH, MEDIUM, LOW).
         type: string
         default: CRITICAL HIGH ERROR
+      runs-on:
+        description: Runner label for all three jobs, e.g. a self-hosted runner's label so a private repo saves its hosted minutes. The jobs need bash, git (for the full-history checkout), jq 1.6 or later and a Docker daemon on the runner; with Docker through a mounted socket, the runner's work directory must have the same path on the host.
+        type: string
+        default: ubuntu-latest
 
 permissions:
   contents: read
@@ -55,7 +59,7 @@ env:
 jobs:
   semgrep:
     if: inputs.semgrep
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -130,7 +134,7 @@ jobs:
 
   trivy:
     if: inputs.trivy
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -208,7 +212,7 @@ jobs:
 
   gitleaks:
     if: inputs.gitleaks
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
