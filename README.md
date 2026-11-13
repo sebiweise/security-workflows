@@ -1,5 +1,7 @@
 # security-workflows
 
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=sebiweise_security-workflows&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=sebiweise_security-workflows)
+
 One reusable GitHub Actions workflow that security-scans a repository, private
 ones included, with open-source tools only: no account, no token, no line limit.
 

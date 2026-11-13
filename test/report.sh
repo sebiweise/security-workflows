@@ -14,19 +14,19 @@ failures=0
 
 for job in semgrep trivy; do
   yq -r ".jobs.$job.steps[] | select(.name == \"Report\") | .run" "$workflow" > "$work/$job.sh"
-  [ -s "$work/$job.sh" ] || { echo "no Report step in job $job"; exit 1; }
+  [[ -s "$work/$job.sh" ]] || { echo "no Report step in job $job"; exit 1; }
 done
 
 # check <job> <expected exit> <name> <report content, or MISSING> [text the output must contain]
 check() {
   local job=$1 want=$2 name=$3 content=$4 expect=${5-} report="$work/report.json" got
   rm -f "$report"
-  [ "$content" = MISSING ] || printf '%s' "$content" > "$report"
+  [[ "$content" = MISSING ]] || printf '%s' "$content" > "$report"
   : > "$work/summary"
   REPORT=$report FAIL_ON="CRITICAL HIGH ERROR" GITHUB_STEP_SUMMARY="$work/summary" \
     bash --noprofile --norc -eo pipefail "$work/$job.sh" > "$work/out" 2>&1
   got=$?
-  if [ "$got" != "$want" ]; then
+  if [[ "$got" != "$want" ]]; then
     echo "FAIL $job: $name: exit $got, expected $want"
     sed 's/^/    /' "$work/out"
     failures=$((failures + 1))
@@ -48,7 +48,7 @@ check() {
   fi
   # Exact ::error line start: commas and colons in a property are escaped, so
   # a value cannot add a property of its own.
-  if [ -n "$expect" ] && ! grep -qF -- "$expect" "$work/out"; then
+  if [[ -n "$expect" ]] && ! grep -qF -- "$expect" "$work/out"; then
     echo "FAIL $job: $name: output does not contain: $expect"
     sed 's/^/    /' "$work/out"
     failures=$((failures + 1))
@@ -101,7 +101,7 @@ check trivy 0 "hostile values below the threshold" "$(trivy_vuln HIGH 1.0.1 "$ev
 check trivy 0 "package name with Markdown" "$(trivy_vuln HIGH 1.0.1 package-lock.json '[x](https://example.com)<b>')" \
   '| `[x](https://example.com)<b> 1.0.0 → 1.0.1` |'
 
-if [ "$failures" -gt 0 ]; then
+if [[ "$failures" -gt 0 ]]; then
   echo "$failures check(s) failed"
   exit 1
 fi
