@@ -43,11 +43,11 @@ concurrency:
 
 jobs:
   scan:
-    uses: sebiweise/security-workflows/.github/workflows/scan.yml@<commit-sha> # v1.0.0
+    uses: sebiweise/security-workflows/.github/workflows/scan.yml@v1.1.0
 ```
 
-Pin the commit SHA like any other action; the repo's Dependabot
-`github-actions` entry then bumps it on every new release tag here.
+Reference a release tag; the repo's Dependabot `github-actions` entry then
+bumps it on every new release tag here.
 
 This repo is public, so any repo, private or not and under any account, can
 call it. To change the rules for your own repos, fork it and point `uses:` at
@@ -68,7 +68,7 @@ falls back to the hosted runner when the variable is unset:
 ```yaml
 jobs:
   scan:
-    uses: sebiweise/security-workflows/.github/workflows/scan.yml@<commit-sha> # v1.1.0
+    uses: sebiweise/security-workflows/.github/workflows/scan.yml@v1.1.0
     with:
       runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-latest' }}
 ```

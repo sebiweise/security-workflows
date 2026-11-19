@@ -28,10 +28,9 @@ reviews:
     - path: ".github/workflows/scan.yml"
       instructions: >-
         Wiederverwendbarer Workflow (workflow_call), den andere Repos per
-        Commit-SHA einbinden. Inputs nie direkt per `${{ inputs.* }}` in
+        Release-Tag einbinden. Inputs nie direkt per `${{ inputs.* }}` in
         `run:` einsetzen, sondern über `env:` (Script-Injection). Tool-Images
-        per Tag und Digest pinnen, Actions per Commit-SHA mit
-        Versionskommentar; Dependabot sieht die Images nicht, neue Versionen
+        per Tag und Digest pinnen, Actions per Versions-Tag; Dependabot sieht die Images nicht, neue Versionen
         werden von Hand aktualisiert. permissions bleiben `contents: read`,
         checkout ohne persist-credentials. Die Fail-Schwellen (Semgrep nach
         semgrep-fail-on, Trivy nur CRITICAL mit verfügbarem Fix, Gitleaks
