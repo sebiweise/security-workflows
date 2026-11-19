@@ -1,10 +1,19 @@
 version: 2
 updates:
-  # Bumps the SHA-pinned actions in .github/workflows/. The scanner images in
+  # Bumps the actions in .github/workflows/. The scanner images in
   # scan.yml are not seen by any ecosystem and are bumped by hand (README.md).
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
     cooldown:
       default-days: 7
+    labels: [dependencies]
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns: ["*"]
