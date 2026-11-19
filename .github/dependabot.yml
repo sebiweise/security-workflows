@@ -1,6 +1,6 @@
 version: 2
 updates:
-  # Bumps the actions in .github/workflows/. The scanner images in
+  # Bumps the version tags of the actions in .github/workflows/. The scanner images in
   # scan.yml are not seen by any ecosystem and are bumped by hand (README.md).
   - package-ecosystem: "github-actions"
     directory: "/"
